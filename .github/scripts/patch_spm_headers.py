@@ -59,6 +59,12 @@ def main():
 
     patched, count = GLOB.subn(_expand, source)
     if count == 0:
+        # The glob survives only inside a comment - upstream already replaced it
+        # with explicit paths (newer AltSign does exactly this, with a note that
+        # "Recursive wildcard paths no longer work as of Xcode 16 :(").
+        if "AltSign/include/AltSign" in source:
+            print("Package.swift: upstream already replaced the glob with explicit paths")
+            return 0
         print("PATCH FAILED: found 'AltSign/**' but could not match the call site", file=sys.stderr)
         return 1
 
