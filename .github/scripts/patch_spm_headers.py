@@ -21,19 +21,26 @@ Replace the glob with the concrete directories that actually hold headers.
 """
 
 import pathlib
+import re
 import sys
 
 
 PACKAGE = pathlib.Path("Dependencies/AltSign/Package.swift")
 
-OLD = '                .headerSearchPath("AltSign/**"),'
-NEW = (
-    '                .headerSearchPath("AltSign"),\n'
-    '                .headerSearchPath("AltSign/Model"),\n'
-    '                .headerSearchPath("AltSign/Model/Apple API"),\n'
-    '                .headerSearchPath("AltSign/include"),\n'
-    '                .headerSearchPath("AltSign/include/AltSign"),'
-)
+# Indentation differs between upstream branches, so match on the glob itself.
+GLOB = re.compile(r'^([ \t]*)\.headerSearchPath\("AltSign/\*\*"\),', re.MULTILINE)
+PATHS = [
+    "AltSign",
+    "AltSign/Model",
+    "AltSign/Model/Apple API",
+    "AltSign/include",
+    "AltSign/include/AltSign",
+]
+
+
+def _expand(match):
+    indent = match.group(1)
+    return "\n".join(f'{indent}.headerSearchPath("{path}"),' for path in PATHS)
 
 
 def main():
@@ -43,19 +50,20 @@ def main():
 
     source = PACKAGE.read_text(encoding="utf-8")
 
-    if NEW in source:
-        print("Package.swift: already patched")
-        return 0
-
-    if OLD not in source:
-        if "AltSign/**" in source:
-            print("PATCH FAILED: 'AltSign/**' present but indentation changed - update the pattern", file=sys.stderr)
+    if "AltSign/**" not in source:
+        if "AltSign/Model/Apple API" in source:
+            print("Package.swift: already patched")
         else:
             print("Package.swift: glob not found (upstream may have fixed it)")
-        return 0 if "AltSign/**" not in source else 1
+        return 0
 
-    PACKAGE.write_text(source.replace(OLD, NEW), encoding="utf-8")
-    print("Package.swift: replaced 'AltSign/**' glob with explicit header search paths")
+    patched, count = GLOB.subn(_expand, source)
+    if count == 0:
+        print("PATCH FAILED: found 'AltSign/**' but could not match the call site", file=sys.stderr)
+        return 1
+
+    PACKAGE.write_text(patched, encoding="utf-8")
+    print(f"Package.swift: replaced {count} 'AltSign/**' glob(s) with explicit header search paths")
     return 0
 
 
