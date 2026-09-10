@@ -40,6 +40,12 @@ jobs:
           echo "----- patched appShortcuts -----"
           sed -n '/appShortcuts/,/^    }/p' "AltStore/Intents/App Intents/AppShortcuts.swift"
 
+      - name: Patch AltSign SwiftPM header search paths
+        working-directory: src
+        run: |
+          python3 ../patches/.github/scripts/patch_spm_headers.py
+          grep -n "headerSearchPath(\"AltSign" Dependencies/AltSign/Package.swift || true
+
       - name: Archive (unsigned)
         working-directory: src
         run: |
