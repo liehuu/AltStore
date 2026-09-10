@@ -1,0 +1,119 @@
+name: Build AltStore (iOS 17.0 Shortcuts fix)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream ref in altstoreio/AltStore to build from'
+        required: false
+        default: 'develop'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout this repo (patch scripts)
+        uses: actions/checkout@v4
+        with:
+          path: patches
+
+      - name: Checkout upstream AltStore
+        uses: actions/checkout@v4
+        with:
+          repository: altstoreio/AltStore
+          ref: ${{ inputs.upstream_ref }}
+          submodules: recursive
+          path: src
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+          git -C src log --oneline -1
+
+      - name: Patch App Intents
+        working-directory: src
+        run: |
+          python3 ../patches/.github/scripts/patch_appintents.py
+          echo "----- patched declaration -----"
+          grep -n "struct RefreshAllAppsIntent" "AltStore/Intents/App Intents/RefreshAllAppsIntent.swift"
+          echo "----- patched appShortcuts -----"
+          sed -n '/appShortcuts/,/^    }/p' "AltStore/Intents/App Intents/AppShortcuts.swift"
+
+      - name: Archive (unsigned)
+        working-directory: src
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace AltStore.xcworkspace \
+            -scheme AltStore \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/build/AltStore.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            archive 2>&1 | tee "$PWD/build.log" | tail -60
+
+      - name: Dump build log on failure
+        if: failure()
+        working-directory: src
+        run: |
+          echo "===== error lines ====="
+          grep -n -i "error:" "$PWD/build.log" | head -40 || true
+          echo "===== last 120 lines ====="
+          tail -120 "$PWD/build.log" || true
+
+      - name: Package IPA
+        working-directory: src
+        run: |
+          APP="build/AltStore.xcarchive/Products/Applications/AltStore.app"
+          test -d "$APP" || { echo "AltStore.app missing"; ls -R build | head -40; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          cd build/ipa
+          zip -qry "$GITHUB_WORKSPACE/src/build/AltStore-unsigned.ipa" Payload
+
+      - name: Verify App Intents wiring
+        working-directory: src
+        run: |
+          APP="build/AltStore.xcarchive/Products/Applications/AltStore.app"
+          python3 - "$APP" <<'EOF'
+          import json, plistlib, sys, pathlib
+
+          app = pathlib.Path(sys.argv[1])
+          plist = plistlib.loads((app / "Info.plist").read_bytes())
+          supported = plist.get("INIntentsSupported") or []
+          print("INIntentsSupported:", supported)
+
+          metadata = app / "Metadata.appintents" / "extract.actionsdata"
+          if not metadata.exists():
+              print("no AppIntents metadata found")
+              sys.exit(0)
+
+          doc = json.loads(metadata.read_text(encoding="utf-8"))
+          bad = []
+          for name, action in (doc.get("actions") or {}).items():
+              ios = (action.get("availabilityAnnotations") or {}).get("LNPlatformNameIOS") or {}
+              print(f"  {name}: iOS>={ios.get('introducedVersion')} custom={action.get('customIntentClassName')}")
+              if action.get("customIntentClassName") == "RefreshAllIntent":
+                  bad.append(name)
+
+          if bad:
+              print("FAIL: App Intent(s) still claim the legacy SiriKit intent:", bad)
+              sys.exit(1)
+          if "RefreshAllIntent" not in supported:
+              print("FAIL: legacy SiriKit intent is not declared in INIntentsSupported")
+              sys.exit(1)
+          print("OK: App Intent is independent; legacy SiriKit RefreshAllIntent still registered.")
+          EOF
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AltStore-unsigned
+          path: src/build/AltStore-unsigned.ipa
+          if-no-files-found: error
