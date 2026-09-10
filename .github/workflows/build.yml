@@ -46,6 +46,17 @@ jobs:
           python3 ../patches/.github/scripts/patch_spm_headers.py
           grep -n "headerSearchPath(\"AltSign" Dependencies/AltSign/Package.swift || true
 
+      - name: Put AppIcon into the asset catalog
+        working-directory: src
+        run: |
+          cd AltStore/Resources
+          # Upstream keeps AppIcon.icon outside the catalog, which makes actool fail with
+          # "None of the input catalogs contained a matching app icon set named AppIcon".
+          if [ -d AppIcon.icon ] && [ ! -d Assets.xcassets/AppIcon.icon ]; then
+            cp -R AppIcon.icon Assets.xcassets/AppIcon.icon
+          fi
+          ls -d Assets.xcassets/AppIcon* 2>/dev/null || echo "no AppIcon in catalog"
+
       - name: Archive (unsigned)
         working-directory: src
         run: |
